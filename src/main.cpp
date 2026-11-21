@@ -33,6 +33,7 @@ struct Args {
   std::string snapshot;
   std::size_t snapshot_every = 0;
   std::size_t check_every = 10;
+  bool no_diagnostics = false;
   bool list = false;
 };
 
@@ -51,10 +52,11 @@ void print_usage() {
             << "  --snapshot PATH    CSV da configuracao dos corpos\n"
             << "  --snapshot-every K grava um quadro a cada K passos (0 = so o final)\n"
             << "  --check-every K    calcula diagnosticos a cada K passos (padrao: 10)\n"
+            << "  --no-diagnostics   desativa diagnosticos O(N^2) (uso em benchmarks)\n"
             << "  --list             lista distribuicoes e solvers\n"
             << "  -h, --help         esta ajuda\n\n"
             << "exemplo:\n"
-            << "  nbody --init plummer --n 5000 --steps 200 --metrics results\\energia.csv\n";
+            << "  nbody --init plummer --n 5000 --steps 200 --metrics results/energia.csv\n";
 }
 
 bool parse_size(const std::string& text, std::size_t& out) {
@@ -160,6 +162,8 @@ Args parse_args(int argc, char** argv) {
       if (!parse_size(value("--check-every"), args.check_every)) {
         throw std::runtime_error("--check-every espera um inteiro");
       }
+    } else if (flag == "--no-diagnostics") {
+      args.no_diagnostics = true;
     } else {
       throw std::runtime_error("argumento desconhecido: " + flag);
     }
@@ -211,8 +215,12 @@ int run(const Args& args) {
   const nbody::BodySystem initial = make_initial_system(args, distribution);
   nbody::Simulation simulation(initial, params);
 
-  const nbody::Diagnostics initial_diag =
-      nbody::compute_diagnostics(simulation.bodies(), params.gravity, params.softening);
+  const bool run_diagnostics = !args.no_diagnostics;
+  nbody::Diagnostics initial_diag;
+  if (run_diagnostics) {
+    initial_diag =
+        nbody::compute_diagnostics(simulation.bodies(), params.gravity, params.softening);
+  }
 
   std::cout << "distribuicao : " << nbody::distribution_name(distribution) << "\n"
             << "corpos       : " << args.n << "\n"
@@ -221,7 +229,7 @@ int run(const Args& args) {
             << " | softening = " << args.softening << "\n\n";
 
   std::ofstream metrics;
-  if (!args.metrics.empty()) {
+  if (run_diagnostics && !args.metrics.empty()) {
     metrics.open(args.metrics, std::ios::trunc);
     if (!metrics) {
       throw std::runtime_error("nao foi possivel criar '" + args.metrics + "'");
@@ -249,9 +257,9 @@ int run(const Args& args) {
 
     const bool last = (step == args.steps);
 
-    // A energia potencial custa O(N^2): em N grande, amostre com menos
-    // frequencia (--check-every).
-    if (step % args.check_every == 0 || last) {
+    // A energia potencial custa O(N^2): em N grande, use --no-diagnostics
+    // ou aumente --check-every.
+    if (run_diagnostics && (step % args.check_every == 0 || last)) {
       latest = nbody::compute_diagnostics(simulation.bodies(), params.gravity, params.softening);
       if (metrics) {
         nbody::write_metrics_row(metrics, step, simulation.time(), latest, total_ms);
@@ -263,8 +271,8 @@ int run(const Args& args) {
     }
 
     if (step % progress_every == 0 || last) {
-      std::cout << "\r  passo " << step << '/' << args.steps << " ("
-                << (100 * step / args.steps) << "%)" << std::flush;
+      std::cout << "\r  passo " << step << '/' << args.steps << " (" << (100 * step / args.steps)
+                << "%)" << std::flush;
     }
   }
   std::cout << "\n";
@@ -274,20 +282,25 @@ int run(const Args& args) {
                               false);
   }
 
-  const double scale = std::max(1.0, std::fabs(initial_diag.total_energy));
-  const double energy_drift =
-      std::fabs(latest.total_energy - initial_diag.total_energy) / scale;
-
   std::cout << std::fixed << std::setprecision(3)
             << "  tempo total : " << (total_ms / 1000.0) << " s ("
-            << (total_ms / static_cast<double>(args.steps)) << " ms/passo)\n"
-            << std::scientific << std::setprecision(4)
-            << "  energia     : " << initial_diag.total_energy << " -> " << latest.total_energy
-            << " (deriva relativa " << energy_drift << ")\n"
-            << "  momento     : (" << latest.momentum.x << ", " << latest.momentum.y << ", "
-            << latest.momentum.z << ")\n"
-            << "  centro mass : (" << latest.center_of_mass.x << ", " << latest.center_of_mass.y
-            << ", " << latest.center_of_mass.z << ")\n";
+            << (total_ms / static_cast<double>(args.steps)) << " ms/passo)\n";
+
+  if (run_diagnostics) {
+    const double scale = std::max(1.0, std::fabs(initial_diag.total_energy));
+    const double energy_drift =
+        std::fabs(latest.total_energy - initial_diag.total_energy) / scale;
+
+    std::cout << std::scientific << std::setprecision(4)
+              << "  energia     : " << initial_diag.total_energy << " -> " << latest.total_energy
+              << " (deriva relativa " << energy_drift << ")\n"
+              << "  momento     : (" << latest.momentum.x << ", " << latest.momentum.y << ", "
+              << latest.momentum.z << ")\n"
+              << "  centro mass : (" << latest.center_of_mass.x << ", " << latest.center_of_mass.y
+              << ", " << latest.center_of_mass.z << ")\n";
+  } else {
+    std::cout << "  diagnosticos: desativados (--no-diagnostics)\n";
+  }
 
   if (!args.metrics.empty()) {
     std::cout << "  metricas    : " << args.metrics << "\n";
@@ -332,8 +345,12 @@ int main(int argc, char** argv) {
     std::cerr << "erro: --softening nao pode ser negativo\n";
     return 2;
   }
-  if (args.check_every < 1) {
+  if (!args.no_diagnostics && args.check_every < 1) {
     std::cerr << "erro: --check-every deve ser >= 1\n";
+    return 2;
+  }
+  if (args.no_diagnostics && !args.metrics.empty()) {
+    std::cerr << "erro: --metrics nao pode ser usado junto com --no-diagnostics\n";
     return 2;
   }
 

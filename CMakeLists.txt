@@ -26,23 +26,13 @@ add_library(nbody_core
 )
 target_include_directories(nbody_core PUBLIC include)
 target_compile_features(nbody_core PUBLIC cxx_std_17)
-
-if(MSVC)
-  target_compile_options(nbody_core PRIVATE /W4 /utf-8)
-else()
-  target_compile_options(nbody_core PRIVATE -Wall -Wextra -Wpedantic)
-endif()
+target_compile_options(nbody_core PRIVATE -Wall -Wextra -Wpedantic)
 
 # ---------------------------------------------------------------------------
 # Executavel
 # ---------------------------------------------------------------------------
 add_executable(nbody src/main.cpp)
 target_link_libraries(nbody PRIVATE nbody_core)
-
-# No MinGW, link estatico gera um .exe que roda sem as DLLs do compilador.
-if(MINGW)
-  target_link_options(nbody PRIVATE -static)
-endif()
 
 # ---------------------------------------------------------------------------
 # Testes (CTest, sem dependencias externas)
@@ -51,8 +41,5 @@ if(NBODY_BUILD_TESTS)
   enable_testing()
   add_executable(nbody_tests tests/test_all.cpp)
   target_link_libraries(nbody_tests PRIVATE nbody_core)
-  if(MINGW)
-    target_link_options(nbody_tests PRIVATE -static)
-  endif()
   add_test(NAME nbody_tests COMMAND nbody_tests)
 endif()

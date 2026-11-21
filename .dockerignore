@@ -1,0 +1,6 @@
+.git
+build
+bin
+results/*.csv
+data/*.bin
+data/*.csv
