@@ -1,5 +1,6 @@
 // Testes de corretude da base sequencial, sem dependencia externa: o
 // executavel retorna 0 em caso de sucesso e integra direto com o CTest.
+#include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <exception>
@@ -51,6 +52,22 @@ bool all_finite(const nbody::BodySystem& bodies) {
   return true;
 }
 
+double mean_relative_accel_error(const nbody::BodySystem& ref, const nbody::BodySystem& approx) {
+  double sum_rel = 0.0;
+  for (std::size_t i = 0; i < ref.size(); ++i) {
+    const double rx = ref.ax[i];
+    const double ry = ref.ay[i];
+    const double rz = ref.az[i];
+    const double dx = approx.ax[i] - rx;
+    const double dy = approx.ay[i] - ry;
+    const double dz = approx.az[i] - rz;
+    const double ref_norm = std::sqrt(rx * rx + ry * ry + rz * rz);
+    const double err_norm = std::sqrt(dx * dx + dy * dy + dz * dz);
+    sum_rel += err_norm / std::max(ref_norm, 1e-12);
+  }
+  return sum_rel / static_cast<double>(ref.size());
+}
+
 }  // namespace
 
 int main() {
@@ -60,8 +77,7 @@ int main() {
 
   check_close(nbody::dot(a, b), 32.0, 1e-12, "vec3: produto escalar");
   check_close(nbody::norm(nbody::Vec3(3.0, 4.0, 0.0)), 5.0, 1e-12, "vec3: norma");
-  check_close(nbody::dot(a - b, nbody::Vec3(-3.0, -3.0, -3.0)), 27.0, 1e-12,
-              "vec3: subtracao");
+  check_close(nbody::dot(a - b, nbody::Vec3(-3.0, -3.0, -3.0)), 27.0, 1e-12, "vec3: subtracao");
   check_close(nbody::norm(nbody::normalized(a)), 1.0, 1e-12, "vec3: normalizacao");
 
   // --- layout SoA ---------------------------------------------------------
@@ -87,8 +103,7 @@ int main() {
   softened.ay.assign(2, 0.0);
   softened.az.assign(2, 0.0);
   nbody::compute_accelerations_bruteforce(softened, 1.0, 1.0);
-  check(std::fabs(softened.ax[0]) < std::fabs(pair.ax[0]),
-        "forca: softening reduz a aceleracao");
+  check(std::fabs(softened.ax[0]) < std::fabs(pair.ax[0]), "forca: softening reduz a aceleracao");
 
   // --- diagnosticos -------------------------------------------------------
   const nbody::Diagnostics diag_pair = nbody::compute_diagnostics(pair, 1.0, 0.0);
@@ -124,9 +139,8 @@ int main() {
               "orbita: separacao preservada (1000 passos)");
 
   const nbody::Diagnostics energy_after = nbody::compute_diagnostics(end, 1.0, 0.0);
-  const double drift =
-      std::fabs(energy_after.total_energy - energy_before.total_energy) /
-      std::fabs(energy_before.total_energy);
+  const double drift = std::fabs(energy_after.total_energy - energy_before.total_energy) /
+                       std::fabs(energy_before.total_energy);
   check(drift < 5e-3, "orbita: energia conservada (drift < 0.5%)");
   check(nbody::norm(energy_after.momentum) < 1e-9, "orbita: momento conservado");
   check(nbody::norm(energy_after.center_of_mass) < 1e-9, "orbita: centro de massa fixo");
@@ -213,17 +227,85 @@ int main() {
   check(nbody::parse_distribution("disco", distribution) &&
             distribution == nbody::Distribution::Disk,
         "distribuicao: parse 'disco'");
-  check(!nbody::parse_distribution("galaxia", distribution),
-        "distribuicao: rejeita nome invalido");
+  check(!nbody::parse_distribution("galaxia", distribution), "distribuicao: rejeita nome invalido");
 
-  params.solver = nbody::Solver::BarnesHut;
-  bool barnes_hut_threw = false;
-  try {
-    nbody::Simulation barnes(orbit, params);
-  } catch (const std::exception&) {
-    barnes_hut_threw = true;
+  // --- barnes-hut sequencial ---------------------------------------------
+  nbody::BodySystem bh_ref = nbody::make_plummer_sphere(250, 1.0, 0.5, 1.0, 42);
+  nbody::compute_accelerations_bruteforce(bh_ref, 1.0, 0.05);
+
+  nbody::SimulationParams bh_params;
+  bh_params.gravity = 1.0;
+  bh_params.softening = 0.05;
+  bh_params.dt = 0.001;
+  bh_params.solver = nbody::Solver::BarnesHut;
+
+  nbody::BodySystem bh_exact = bh_ref;
+  bh_params.theta = 0.0;
+  nbody::compute_accelerations_barnes_hut(bh_exact, bh_params);
+  check(mean_relative_accel_error(bh_ref, bh_exact) < 1e-12,
+        "barnes-hut: theta=0 reproduz forca bruta");
+
+  nbody::BodySystem bh_t02 = bh_ref;
+  bh_params.theta = 0.2;
+  nbody::compute_accelerations_barnes_hut(bh_t02, bh_params);
+  const double err_02 = mean_relative_accel_error(bh_ref, bh_t02);
+
+  nbody::BodySystem bh_t05 = bh_ref;
+  bh_params.theta = 0.5;
+  nbody::compute_accelerations_barnes_hut(bh_t05, bh_params);
+  const double err_05 = mean_relative_accel_error(bh_ref, bh_t05);
+
+  nbody::BodySystem bh_t08 = bh_ref;
+  bh_params.theta = 0.8;
+  nbody::compute_accelerations_barnes_hut(bh_t08, bh_params);
+  const double err_08 = mean_relative_accel_error(bh_ref, bh_t08);
+
+  std::cout << "[info]   erro rel. medio (N=250): theta=0.2 -> " << err_02
+            << ", theta=0.5 -> " << err_05 << ", theta=0.8 -> " << err_08 << "\n";
+
+  check(err_05 < 5e-2, "barnes-hut: erro relativo medio < 5% para theta=0.5");
+  check(err_02 < err_05 && err_05 < err_08,
+        "barnes-hut: erro cresce monotonicamente com theta (0.2 < 0.5 < 0.8)");
+
+  // Corpos coincidentes nao podem travar a subdivisao.
+  nbody::BodySystem coincident;
+  coincident.add_body(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0);
+  coincident.add_body(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0);
+  coincident.add_body(1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0);
+  nbody::BodySystem coincident_ref = coincident;
+  nbody::compute_accelerations_bruteforce(coincident_ref, 1.0, 0.1);
+  bh_params.theta = 0.5;
+  bh_params.softening = 0.1;
+  nbody::compute_accelerations_barnes_hut(coincident, bh_params);
+  check(mean_relative_accel_error(coincident_ref, coincident) < 1e-12,
+        "barnes-hut: trata corpos coincidentes corretamente");
+
+  // Conservacao de energia na orbita de 2 corpos via Simulation.
+  nbody::SimulationParams bh_orbit_params;
+  bh_orbit_params.gravity = 1.0;
+  bh_orbit_params.softening = 0.0;
+  bh_orbit_params.dt = 0.001;
+  bh_orbit_params.theta = 0.5;
+  bh_orbit_params.solver = nbody::Solver::BarnesHut;
+
+  nbody::Simulation bh_sim(orbit, bh_orbit_params);
+  const nbody::Diagnostics bh_e0 = nbody::compute_diagnostics(bh_sim.bodies(), 1.0, 0.0);
+  for (int i = 0; i < 500; ++i) {
+    bh_sim.step();
   }
-  check(barnes_hut_threw, "barnes-hut: stub lanca erro explicativo");
+  const nbody::Diagnostics bh_e1 = nbody::compute_diagnostics(bh_sim.bodies(), 1.0, 0.0);
+  const double bh_drift =
+      std::fabs(bh_e1.total_energy - bh_e0.total_energy) / std::fabs(bh_e0.total_energy);
+  check(bh_drift < 5e-3, "barnes-hut: orbita conserva energia");
+
+  bool negative_theta_threw = false;
+  try {
+    bh_params.theta = -0.1;
+    nbody::compute_accelerations_barnes_hut(bh_exact, bh_params);
+  } catch (const std::exception&) {
+    negative_theta_threw = true;
+  }
+  check(negative_theta_threw, "barnes-hut: rejeita theta negativo");
 
   std::cout << "\n" << (g_checks - g_failures) << "/" << g_checks << " verificacoes passaram\n";
   return g_failures == 0 ? 0 : 1;

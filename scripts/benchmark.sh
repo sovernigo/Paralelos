@@ -81,7 +81,7 @@ echo "executavel : ${EXE}"
 echo "solver     : ${SOLVER} (theta=${THETA})"
 echo "init       : ${INIT} (seed=${SEED})"
 echo "tamanhos   : ${SIZE_ARRAY[*]}"
-echo "passos     : ${STEPS} (warmup: ${WARMUP}, repeticoes:${REPEATS})"
+echo "passos     : ${STEPS} (warmup: ${WARMUP}, repeticoes: ${REPEATS})"
 echo "csv        : ${OUT_FILE}"
 echo ""
 
@@ -115,18 +115,18 @@ for raw_size in "${SIZE_ARRAY[@]}"; do
   samples=()
   for ((r = 1; r <= REPEATS; ++r)); do
     output="$("${CMD[@]}" 2>&1)"
-    ms_per_step="$(printf '\%s\n' "$output" | sed -nE 's/.*\(([0-9]+(\.[0-9]+)?) ms\/passo\).*/\1/p' | head -n 1)"
+    ms_per_step="$(printf '%s\n' "$output" | sed -nE 's/.*\(([0-9]+(\.[0-9]+)?) ms\/passo\).*/\1/p' | head -n 1)"
     if [[ -n "$ms_per_step" ]]; then
       samples+=("$ms_per_step")
     else
-      echo "Aviso: nao consegui ler o tempo para n=${size} (repeticao${r})" >&2
+      echo "Aviso: nao consegui ler o tempo para n=${size} (repeticao ${r})" >&2
       printf '%s\n' "$output" >&2
     fi
   done
 
   if (( ${#samples[@]} > 0 )); then
     stats="$(
-      printf '%s\n' "${samples[@]}" \vert{} sort -n \vert{} awk -v n="$size" '
+      printf '%s\n' "${samples[@]}" | sort -n | awk -v n="$size" '
         { a[NR] = $1 }
         END {
           best = a[1];

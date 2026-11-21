@@ -122,3 +122,4 @@ o que faria diferente._
 ```sh
 ./scripts/build.sh --clean --tests
 ./scripts/benchmark.sh --solver brute --sizes 1000,2000,4000,8000 --steps 20 --repeats 3
+```
