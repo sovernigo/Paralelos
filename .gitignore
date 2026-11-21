@@ -1,0 +1,35 @@
+# build
+build/
+build-*/
+cmake-build-*/
+out/
+bin/
+
+# CMake / IDE
+CMakeUserPresets.json
+CMakeCache.txt
+.vs/
+.vscode/
+*.sln
+*.vcxproj*
+*.user
+
+# binarios e objetos
+*.exe
+*.o
+*.obj
+*.pdb
+*.ilk
+*.dll
+*.so
+*.dylib
+
+# resultados de benchmark (regeneraveis)
+results/*.csv
+results/*.txt
+!results/.gitkeep
+
+# dados grandes de entrada
+data/*.bin
+data/*.csv
+!data/.gitkeep
