@@ -32,14 +32,20 @@ Simulation::Simulation(const BodySystem& initial, const SimulationParams& params
   if (bodies_.size() < 2) {
     throw std::invalid_argument("a simulacao precisa de pelo menos 2 corpos");
   }
-  if (params_.dt <= 0.0) {
+  if (params_.dt <= Real(0.0)) {
     throw std::invalid_argument("dt deve ser positivo");
   }
-  if (params_.softening < 0.0) {
+  if (params_.softening < Real(0.0)) {
     throw std::invalid_argument("o softening nao pode ser negativo");
   }
-  if (params_.gravity < 0.0) {
+  if (params_.gravity < Real(0.0)) {
     throw std::invalid_argument("a constante gravitacional nao pode ser negativa");
+  }
+
+  if (params_.solver == Solver::BarnesHutCuda) {
+    cuda_ = make_cuda_barnes_hut_backend(bodies_, params_);
+    host_dirty_ = true;
+    return;
   }
 
   // Aceleracao em t = 0: o velocity Verlet precisa dela para o primeiro kick.
@@ -47,14 +53,38 @@ Simulation::Simulation(const BodySystem& initial, const SimulationParams& params
 }
 
 void Simulation::step() {
-  const Real half_dt = 0.5 * params_.dt;
+  if (cuda_) {
+    cuda_->step();
+    host_dirty_ = true;
+    ++steps_;
+    return;
+  }
 
-  kick(bodies_, half_dt);   // v(t + dt/2)
-  drift(bodies_, params_.dt);  // x(t + dt)
-  compute_accelerations(bodies_, params_);  // a(t + dt)
-  kick(bodies_, half_dt);   // v(t + dt)
+  const Real half_dt = Real(0.5) * params_.dt;
+  kick(bodies_, half_dt);
+  drift(bodies_, params_.dt);
+  compute_accelerations(bodies_, params_);
+  kick(bodies_, half_dt);
 
   ++steps_;
+}
+
+void Simulation::synchronize() const {
+  if (cuda_) {
+    cuda_->synchronize();
+  }
+}
+
+const BodySystem& Simulation::bodies() const {
+  if (cuda_ && host_dirty_) {
+    cuda_->download(bodies_);
+    host_dirty_ = false;
+  }
+  return bodies_;
+}
+
+CudaKernelTimings Simulation::cuda_timings() const {
+  return cuda_ ? cuda_->timings() : CudaKernelTimings{};
 }
 
 }  // namespace nbody

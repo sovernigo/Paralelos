@@ -1,30 +1,23 @@
-#include "nbody/accelerations.hpp"
-#include "nbody/params.hpp"
-
-#include <algorithm>
-#include <cctype>
 #include <stdexcept>
 #include <string>
 
+#include "nbody/accelerations.hpp"
+#include "nbody/cuda_backend.hpp"
+#include "nbody/params.hpp"
+
 namespace nbody {
-namespace {
-
-std::string to_lower(std::string text) {
-  std::transform(text.begin(), text.end(), text.begin(),
-                 [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-  return text;
-}
-
-}  // namespace
 
 bool parse_solver(const std::string& text, Solver& out) {
-  const std::string key = to_lower(text);
-  if (key == "brute" || key == "brute-force" || key == "bruteforce") {
+  if (text == "brute" || text == "brute-force") {
     out = Solver::BruteForce;
     return true;
   }
-  if (key == "barnes-hut" || key == "barneshut" || key == "barnes") {
+  if (text == "barnes-hut" || text == "bh") {
     out = Solver::BarnesHut;
+    return true;
+  }
+  if (text == "barnes-hut-cuda" || text == "bh-cuda" || text == "cuda") {
+    out = Solver::BarnesHutCuda;
     return true;
   }
   return false;
@@ -36,6 +29,8 @@ const char* solver_name(Solver solver) {
       return "brute";
     case Solver::BarnesHut:
       return "barnes-hut";
+    case Solver::BarnesHutCuda:
+      return "barnes-hut-cuda";
   }
   return "desconhecido";
 }
@@ -48,9 +43,11 @@ void compute_accelerations(BodySystem& system, const SimulationParams& params) {
     case Solver::BarnesHut:
       compute_accelerations_barnes_hut(system, params);
       return;
+    case Solver::BarnesHutCuda:
+      compute_accelerations_barnes_hut_cuda(system, params);
+      return;
   }
-
-  throw std::runtime_error("solver desconhecido");
+  throw std::invalid_argument("solver desconhecido");
 }
 
 }  // namespace nbody

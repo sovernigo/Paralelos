@@ -7,18 +7,19 @@
 
 namespace nbody {
 
-// Como as aceleracoes sao calculadas a cada passo.
 enum class Solver {
-  BruteForce,  // O(N^2): avalia todos os pares (baseline sequencial)
-  BarnesHut,   // O(N log N): arvore + criterio theta (proxima etapa)
+  BruteForce,     // O(N^2) sequencial em CPU (referencia exata)
+  BarnesHut,      // O(N log N) sequencial em CPU (baseline para speedup)
+  BarnesHutCuda,  // O(N log N) paralelo 100% em GPU (CUDA)
 };
 
 struct SimulationParams {
-  Real gravity = 1.0;    // G
-  Real softening = 0.05; // epsilon: evita aceleracao infinita em encontros proximos
-  Real dt = 0.002;       // passo de integracao
-  Real theta = 0.5;      // criterio s/d < theta do Barnes-Hut
+  Real gravity = Real(1.0);
+  Real softening = Real(0.05);
+  Real dt = Real(0.002);
+  Real theta = Real(0.5);
   Solver solver = Solver::BruteForce;
+  bool profile_kernels = false;
 };
 
 bool parse_solver(const std::string& text, Solver& out);

@@ -15,6 +15,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     cuda-nsight-compute-12-4 \
     && rm -rf /var/lib/apt/lists/*
 
+# Remove cuda-compat para evitar conflito com o driver GeForce (RTX 2060 SUPER) no host/WSL2
+RUN rm -rf /usr/local/cuda/compat /etc/ld.so.conf.d/00-cuda-compat.conf && ldconfig
+
 # Garante o binario do Nsight Compute (ncu) no PATH
 ENV PATH="/usr/local/cuda/bin:/opt/nvidia/nsight-compute:${PATH}"
 

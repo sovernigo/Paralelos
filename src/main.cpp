@@ -8,12 +8,14 @@
 #include <stdexcept>
 #include <string>
 
+#include "nbody/cuda_backend.hpp"
 #include "nbody/diagnostics.hpp"
 #include "nbody/initial_conditions.hpp"
 #include "nbody/io.hpp"
 #include "nbody/params.hpp"
 #include "nbody/simulation.hpp"
 #include "nbody/timer.hpp"
+#include "nbody/types.hpp"
 
 namespace {
 
@@ -34,25 +36,27 @@ struct Args {
   std::size_t snapshot_every = 0;
   std::size_t check_every = 10;
   bool no_diagnostics = false;
+  bool profile_kernels = false;
   bool list = false;
 };
 
 void print_usage() {
   std::cout << "uso: nbody [opcoes]\n\n"
-            << "  --init NAME        uniforme | plummer | disco   (padrao: plummer)\n"
-            << "  --n N              numero de corpos            (padrao: 2000)\n"
-            << "  --steps S          passos de integracao        (padrao: 100)\n"
-            << "  --dt D             passo de tempo              (padrao: 0.002)\n"
-            << "  --softening E      suavizacao de Plummer       (padrao: 0.05)\n"
-            << "  --gravity G        constante gravitacional     (padrao: 1.0)\n"
-            << "  --theta T          criterio do Barnes-Hut      (padrao: 0.5)\n"
-            << "  --solver NAME      brute | barnes-hut          (padrao: brute)\n"
-            << "  --seed S           semente aleatoria           (padrao: 42)\n"
+            << "  --init NAME        uniforme | plummer | disco         (padrao: plummer)\n"
+            << "  --n N              numero de corpos                  (padrao: 2000)\n"
+            << "  --steps S          passos de integracao              (padrao: 100)\n"
+            << "  --dt D             passo de tempo                    (padrao: 0.002)\n"
+            << "  --softening E      suavizacao de Plummer             (padrao: 0.05)\n"
+            << "  --gravity G        constante gravitacional           (padrao: 1.0)\n"
+            << "  --theta T          criterio do Barnes-Hut            (padrao: 0.5)\n"
+            << "  --solver NAME      brute | barnes-hut | barnes-hut-cuda (padrao: brute)\n"
+            << "  --seed S           semente aleatoria                 (padrao: 42)\n"
             << "  --metrics PATH     CSV com energia/momento por passo\n"
             << "  --snapshot PATH    CSV da configuracao dos corpos\n"
             << "  --snapshot-every K grava um quadro a cada K passos (0 = so o final)\n"
             << "  --check-every K    calcula diagnosticos a cada K passos (padrao: 10)\n"
             << "  --no-diagnostics   desativa diagnosticos O(N^2) (uso em benchmarks)\n"
+            << "  --profile-kernels  mede tempo por kernel no solver CUDA\n"
             << "  --list             lista distribuicoes e solvers\n"
             << "  -h, --help         esta ajuda\n\n"
             << "exemplo:\n"
@@ -164,6 +168,8 @@ Args parse_args(int argc, char** argv) {
       }
     } else if (flag == "--no-diagnostics") {
       args.no_diagnostics = true;
+    } else if (flag == "--profile-kernels") {
+      args.profile_kernels = true;
     } else {
       throw std::runtime_error("argumento desconhecido: " + flag);
     }
@@ -178,18 +184,26 @@ void print_list() {
             << "  plummer  : esfera de Plummer em equilibrio (posicoes e velocidades)\n"
             << "  disco    : disco fino em rotacao circular\n\n"
             << "solvers (--solver):\n"
-            << "  brute      : forca bruta O(N^2), baseline sequencial\n"
-            << "  barnes-hut : arvore com criterio theta, O(N log N) (a implementar)\n";
+            << "  brute           : forca bruta O(N^2), baseline sequencial\n"
+            << "  barnes-hut      : Octree linearizada em CPU, O(N log N)\n"
+            << "  barnes-hut-cuda : Octree linearizada 100% em GPU (CUDA) ["
+            << (nbody::cuda_backend_available() ? "disponivel" : "indisponivel") << "]\n\n"
+            << "precisao compilada: " << (nbody::kUsingFloat ? "float (FP32)" : "double (FP64)")
+            << "\n";
 }
 
 nbody::BodySystem make_initial_system(const Args& args, nbody::Distribution distribution) {
+  const nbody::Real total_mass = static_cast<nbody::Real>(kTotalMass);
+  const nbody::Real gravity = static_cast<nbody::Real>(args.gravity);
+
   switch (distribution) {
     case nbody::Distribution::UniformSphere:
-      return nbody::make_uniform_sphere(args.n, kTotalMass, 1.0, args.seed);
+      return nbody::make_uniform_sphere(args.n, total_mass, nbody::Real(1.0), args.seed);
     case nbody::Distribution::Plummer:
-      return nbody::make_plummer_sphere(args.n, kTotalMass, 0.5, args.gravity, args.seed);
+      return nbody::make_plummer_sphere(args.n, total_mass, nbody::Real(0.5), gravity, args.seed);
     case nbody::Distribution::Disk:
-      return nbody::make_disk(args.n, kTotalMass, 1.0, 0.05, args.gravity, args.seed);
+      return nbody::make_disk(args.n, total_mass, nbody::Real(1.0), nbody::Real(0.05), gravity,
+                              args.seed);
   }
   throw std::runtime_error("distribuicao invalida");
 }
@@ -206,11 +220,12 @@ int run(const Args& args) {
   }
 
   nbody::SimulationParams params;
-  params.gravity = args.gravity;
-  params.softening = args.softening;
-  params.dt = args.dt;
-  params.theta = args.theta;
+  params.gravity = static_cast<nbody::Real>(args.gravity);
+  params.softening = static_cast<nbody::Real>(args.softening);
+  params.dt = static_cast<nbody::Real>(args.dt);
+  params.theta = static_cast<nbody::Real>(args.theta);
   params.solver = solver;
+  params.profile_kernels = args.profile_kernels;
 
   const nbody::BodySystem initial = make_initial_system(args, distribution);
   nbody::Simulation simulation(initial, params);
@@ -224,7 +239,8 @@ int run(const Args& args) {
 
   std::cout << "distribuicao : " << nbody::distribution_name(distribution) << "\n"
             << "corpos       : " << args.n << "\n"
-            << "solver       : " << nbody::solver_name(solver) << "\n"
+            << "solver       : " << nbody::solver_name(solver)
+            << " (" << (nbody::kUsingFloat ? "FP32" : "FP64") << ")\n"
             << "passos       : " << args.steps << " | dt = " << args.dt
             << " | softening = " << args.softening << "\n\n";
 
@@ -235,12 +251,12 @@ int run(const Args& args) {
       throw std::runtime_error("nao foi possivel criar '" + args.metrics + "'");
     }
     nbody::write_metrics_header(metrics);
-    nbody::write_metrics_row(metrics, 0, 0.0, initial_diag, 0.0);
+    nbody::write_metrics_row(metrics, 0, nbody::Real(0.0), initial_diag, 0.0);
   }
 
   const bool streaming = !args.snapshot.empty() && args.snapshot_every > 0;
   if (streaming) {
-    nbody::write_snapshot_csv(args.snapshot, simulation.bodies(), 0, 0.0, false);
+    nbody::write_snapshot_csv(args.snapshot, simulation.bodies(), 0, nbody::Real(0.0), false);
   }
 
   double total_ms = 0.0;
@@ -253,6 +269,7 @@ int run(const Args& args) {
     nbody::Timer timer;
     timer.start();
     simulation.step();
+    simulation.synchronize();
     total_ms += timer.stop_ms();
 
     const bool last = (step == args.steps);
@@ -282,14 +299,26 @@ int run(const Args& args) {
                               false);
   }
 
+  const double steps_d = static_cast<double>(args.steps);
   std::cout << std::fixed << std::setprecision(3)
-            << "  tempo total : " << (total_ms / 1000.0) << " s ("
-            << (total_ms / static_cast<double>(args.steps)) << " ms/passo)\n";
+            << "  tempo total : " << (total_ms / 1000.0) << " s (" << (total_ms / steps_d)
+            << " ms/passo)\n";
+
+  if (simulation.uses_cuda() && args.profile_kernels) {
+    const nbody::CudaKernelTimings t = simulation.cuda_timings();
+    std::cout << "  kernels GPU : "
+              << "bbox=" << (t.bbox_ms / steps_d) << " ms"
+              << " | sort=" << (t.sort_ms / steps_d) << " ms"
+              << " | build=" << (t.build_tree_ms / steps_d) << " ms"
+              << " | sum=" << (t.summarize_ms / steps_d) << " ms"
+              << " | force=" << (t.force_ms / steps_d) << " ms"
+              << " | verlet=" << (t.integrate_ms / steps_d) << " ms\n";
+  }
 
   if (run_diagnostics) {
-    const double scale = std::max(1.0, std::fabs(initial_diag.total_energy));
+    const double scale = std::max(1.0, std::fabs(static_cast<double>(initial_diag.total_energy)));
     const double energy_drift =
-        std::fabs(latest.total_energy - initial_diag.total_energy) / scale;
+        std::fabs(static_cast<double>(latest.total_energy - initial_diag.total_energy)) / scale;
 
     std::cout << std::scientific << std::setprecision(4)
               << "  energia     : " << initial_diag.total_energy << " -> " << latest.total_energy

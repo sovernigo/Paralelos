@@ -29,7 +29,7 @@ Uso: $0 [opcoes]
   --dt D             passo de tempo (padrao: 0.001)
   --softening E      suavizacao de Plummer (padrao: 0.05)
   --gravity G        constante gravitacional (padrao: 1.0)
-  --solver NAME      brute | barnes-hut (padrao: brute)
+  --solver NAME      brute | barnes-hut | barnes-hut-cuda (padrao: brute)
   --theta T          criterio theta (padrao: 0.5)
   --seed S           semente aleatoria (padrao: 42)
   --out-dir DIR      diretorio de saida (padrao: results)
