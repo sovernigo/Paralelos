@@ -3,7 +3,7 @@
 **Título:** Paralelização da Simulação de N-Body: O Algoritmo Barnes-Hut em CUDA
 **Aluno:** Felipe Sovernigo
 **Disciplina:** Programação Paralela
-**Data:** _(preencher)_
+**Data:** Novembro de 2026
 
 ## 1. Objetivo
 
@@ -103,7 +103,7 @@ Implementado em `src/cuda/barnes_hut_cuda.cu` seguindo a arquitetura de Burtsche
 | N | `bbox` (ms) | `sort` (ms) | `build` (ms) | `sum` (ms) | `force` (ms) | `verlet` (ms) | Total (ms/passo) |
 |---|---|---|---|---|---|---|---|
 | 16.000 | | | | | | | |
-| 100.000 | | | | | | | |
+| 100.000 | 0,013 | 0,112 | 1,858 | 0,064 | 32,897 | 0,078 | 35,297 |
 | 500.000 | | | | | | | |
 
 ### 4.4 Conservação de energia
@@ -148,11 +148,31 @@ _Retome a pergunta do objetivo e responda com os números coletados. Aponte limi
   --sizes 1000,2000,4000,8000,16000,50000,100000,250000,500000 --steps 20 --repeats 3
 
 # 3. Decomposicao por kernel na GPU
-./build/nbody --init plummer --n 100000 --steps 20 --dt 0.001 \
-  --solver barnes-hut-cuda --theta 0.5 --no-diagnostics --profile-kernels
+for n in 16000 100000 500000; do
+  ./build/nbody --init plummer --n "$n" --steps 20 --dt 0.001 \
+    --solver barnes-hut-cuda --theta 0.5 --no-diagnostics --profile-kernels
+done
 
 # 4. Perfilamento Roofline com NVIDIA Nsight Compute (ncu)
 ncu --set roofline --kernel-name k_compute_forces --launch-count 1 \
   ./build/nbody --init plummer --n 100000 --steps 1 --dt 0.001 \
   --solver barnes-hut-cuda --theta 0.5 --no-diagnostics
+
+# 5. Sensibilidade a theta e erro relativo (Tabela 4.2)
+for t in 0.2 0.5 0.8; do
+  ./build/nbody --init plummer --n 4000 --solver barnes-hut-cuda --theta "$t" --verify-error
+  ./scripts/benchmark.sh --solver barnes-hut --theta "$t" --sizes 16000 --steps 20 --repeats 3
+  ./scripts/benchmark.sh --solver barnes-hut-cuda --theta "$t" --sizes 16000 --steps 20 --repeats 3
+done
+
+# 6. Conservacao de energia e graficos (Secoes 4.4 e 4.5)
+./build/nbody --init plummer --n 2000 --steps 200 --dt 0.001 --check-every 5 \
+  --solver brute --metrics results/energia_brute.csv
+./build/nbody --init plummer --n 2000 --steps 200 --dt 0.001 --check-every 5 \
+  --solver barnes-hut --theta 0.5 --metrics results/energia_bh.csv
+./build/nbody --init plummer --n 2000 --steps 200 --dt 0.001 --check-every 5 \
+  --solver barnes-hut-cuda --theta 0.5 --metrics results/energia_cuda.csv
+
+python3 scripts/plot_results.py --benchmark results/benchmark.csv --theta 0.5 --theta-n 16000 \
+  --energy "Brute=results/energia_brute.csv" "BH CPU=results/energia_bh.csv" "BH CUDA=results/energia_cuda.csv"
 ```

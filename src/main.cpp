@@ -8,6 +8,7 @@
 #include <stdexcept>
 #include <string>
 
+#include "nbody/accelerations.hpp"
 #include "nbody/cuda_backend.hpp"
 #include "nbody/diagnostics.hpp"
 #include "nbody/initial_conditions.hpp"
@@ -37,6 +38,7 @@ struct Args {
   std::size_t check_every = 10;
   bool no_diagnostics = false;
   bool profile_kernels = false;
+  bool verify_error = false;
   bool list = false;
 };
 
@@ -57,6 +59,7 @@ void print_usage() {
             << "  --check-every K    calcula diagnosticos a cada K passos (padrao: 10)\n"
             << "  --no-diagnostics   desativa diagnosticos O(N^2) (uso em benchmarks)\n"
             << "  --profile-kernels  mede tempo por kernel no solver CUDA\n"
+            << "  --verify-error     compara aceleracao em t=0 contra brute e encerra\n"
             << "  --list             lista distribuicoes e solvers\n"
             << "  -h, --help         esta ajuda\n\n"
             << "exemplo:\n"
@@ -170,6 +173,8 @@ Args parse_args(int argc, char** argv) {
       args.no_diagnostics = true;
     } else if (flag == "--profile-kernels") {
       args.profile_kernels = true;
+    } else if (flag == "--verify-error") {
+      args.verify_error = true;
     } else {
       throw std::runtime_error("argumento desconhecido: " + flag);
     }
@@ -208,6 +213,60 @@ nbody::BodySystem make_initial_system(const Args& args, nbody::Distribution dist
   throw std::runtime_error("distribuicao invalida");
 }
 
+int run_verify_error(const Args& args, nbody::Distribution distribution,
+                     const nbody::SimulationParams& params) {
+  nbody::BodySystem ref = make_initial_system(args, distribution);
+  nbody::BodySystem approx = ref;
+
+  nbody::compute_accelerations_bruteforce(ref, params.gravity, params.softening);
+  nbody::compute_accelerations(approx, params);
+
+  double sum_rel = 0.0;
+  double max_rel = 0.0;
+  double sum_err2 = 0.0;
+  double sum_ref2 = 0.0;
+
+  for (std::size_t i = 0; i < ref.size(); ++i) {
+    const double rx = static_cast<double>(ref.ax[i]);
+    const double ry = static_cast<double>(ref.ay[i]);
+    const double rz = static_cast<double>(ref.az[i]);
+    const double dx = static_cast<double>(approx.ax[i]) - rx;
+    const double dy = static_cast<double>(approx.ay[i]) - ry;
+    const double dz = static_cast<double>(approx.az[i]) - rz;
+
+    const double ref2 = rx * rx + ry * ry + rz * rz;
+    const double err2 = dx * dx + dy * dy + dz * dz;
+    const double rel = std::sqrt(err2) / std::max(std::sqrt(ref2), 1e-12);
+
+    sum_rel += rel;
+    max_rel = std::max(max_rel, rel);
+    sum_err2 += err2;
+    sum_ref2 += ref2;
+  }
+
+  const double mean_rel = sum_rel / static_cast<double>(ref.size());
+  const double l2_rel = std::sqrt(sum_err2) / std::max(std::sqrt(sum_ref2), 1e-12);
+
+  std::cout << "verificacao de erro (t = 0 vs. brute)\n"
+            << "distribuicao : " << nbody::distribution_name(distribution) << " (seed = "
+            << args.seed << ")\n"
+            << "corpos       : " << args.n << "\n"
+            << "solver       : " << nbody::solver_name(params.solver) << " ("
+            << (nbody::kUsingFloat ? "FP32" : "FP64") << ") | theta = " << args.theta
+            << " | softening = " << args.softening << "\n\n"
+            << std::scientific << std::setprecision(4)
+            << "  erro rel. medio : " << mean_rel << " (" << std::fixed << std::setprecision(4)
+            << (mean_rel * 100.0) << "%)\n"
+            << std::scientific << std::setprecision(4)
+            << "  erro rel. L2    : " << l2_rel << " (" << std::fixed << std::setprecision(4)
+            << (l2_rel * 100.0) << "%)\n"
+            << std::scientific << std::setprecision(4)
+            << "  erro rel. max   : " << max_rel << " (" << std::fixed << std::setprecision(4)
+            << (max_rel * 100.0) << "%)\n";
+
+  return 0;
+}
+
 int run(const Args& args) {
   nbody::Distribution distribution;
   if (!nbody::parse_distribution(args.init, distribution)) {
@@ -226,6 +285,10 @@ int run(const Args& args) {
   params.theta = static_cast<nbody::Real>(args.theta);
   params.solver = solver;
   params.profile_kernels = args.profile_kernels;
+
+  if (args.verify_error) {
+    return run_verify_error(args, distribution, params);
+  }
 
   const nbody::BodySystem initial = make_initial_system(args, distribution);
   nbody::Simulation simulation(initial, params);

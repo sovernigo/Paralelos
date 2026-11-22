@@ -12,6 +12,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     clang-format \
     python3 \
+    python3-matplotlib \
     cuda-nsight-compute-12-4 \
     && rm -rf /var/lib/apt/lists/*
 

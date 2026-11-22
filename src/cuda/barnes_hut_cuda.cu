@@ -32,11 +32,9 @@ void cuda_check(cudaError_t err, const char* expr, const char* file, int line) {
 
 #define NBODY_CUDA_CHECK(expr) cuda_check((expr), #expr, __FILE__, __LINE__)
 
+#ifdef NBODY_USE_FLOAT
 __device__ inline float rsqrt_real(float x) { return rsqrtf(x); }
-__device__ inline double rsqrt_real(double x) { return rsqrt(x); }
-
 __device__ inline float fabs_real(float x) { return fabsf(x); }
-__device__ inline double fabs_real(double x) { return fabs(x); }
 
 __device__ inline void atomic_min_real(float* addr, float val) {
   unsigned int* uaddr = reinterpret_cast<unsigned int*>(addr);
@@ -61,6 +59,9 @@ __device__ inline void atomic_max_real(float* addr, float val) {
     }
   }
 }
+#else
+__device__ inline double rsqrt_real(double x) { return rsqrt(x); }
+__device__ inline double fabs_real(double x) { return fabs(x); }
 
 __device__ inline void atomic_min_real(double* addr, double val) {
   unsigned long long* uaddr = reinterpret_cast<unsigned long long*>(addr);
@@ -85,7 +86,7 @@ __device__ inline void atomic_max_real(double* addr, double val) {
     }
   }
 }
-
+#endif
 __device__ inline int octant_of(Real x, Real y, Real z, Real cx, Real cy, Real cz) {
   int oct = 0;
   if (x >= cx) oct |= 1;
